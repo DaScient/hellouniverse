@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- genius.html: Enciphered & Secured Version -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Chaotic Reality Breaker x Kiss Me More</title>
+  <!-- Three.js from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    /* Base styles with transparent background */
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      font-family: sans-serif;
+    }
+    canvas { display: block; }
+
+    /* Encrypted fullscreen button (glowy purplish plasma) in the upper-left */
+    body:hover #fullscreen-button,
+    #fullscreen-button:active {
+      opacity: 1;
+    }
+    #fullscreen-button {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: "Papyrus", fantasy;
+      color: #fff;
+      border: 1px solid rgba(200,0,200,0.8);
+      border-radius: 6px;
+      background: linear-gradient(135deg, rgba(128,0,128,1), rgba(255,0,255,1));
+      box-shadow: 0 0 10px rgba(255,0,255,0.8);
+      letter-spacing: 1px;
+      cursor: pointer;
+      z-index: 10;
+      opacity: 0; /* hidden until hover/touch */
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+    #fullscreen-button:hover {
+      transform: scale(1.1) rotate(1deg);
+      background: linear-gradient(135deg, rgba(128,0,128,0.8), rgba(255,0,255,0.8));
+      border-color: #fff;
+      box-shadow: 0 0 15px rgba(255,0,255,1);
+    }
+
+    /* Push button (“ā butțøň”) at the bottom-right */
+    #pushButton {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      padding: 10px 15px;
+      font-size: 14px;
+      background: rgba(50,50,50,0.8);
+      border: 2px solid #fff;
+      color: #fff;
+      cursor: pointer;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+  <!-- Encrypted fullscreen button (hidden unless hovered/touched) -->
+  <button id="fullscreen-button">ENCRYPTED</button>
+  <!-- Push button for white‑hole activation (hover/touch-hold >6 seconds) -->
+  <button id="pushButton">ā butțøň</button>
+
+  <script>
+  (function(){
+    /**********************************
+     * GLOBAL VARIABLES & CONFIGURATION
+     **********************************/
+    let scene, camera, renderer, clock;
+    let particles, particleGeo;
+    const initPositions = [];
+    const particleCount = 100000;  // Main particles
+
+    // Orbiting particles configuration
+    const orbitParticleCount = 100000; // Additional orbiting particles
+    let orbitParticles, orbitGeo;
+    const orbitVertices = [];
+    const orbitColors = [];
+    const orbitParentIndices = [];    // For each orbiting particle, index into main particle set
+    const orbitDistances = [];          // Orbit radius per particle
+    const orbitInitialAngles = [];      // Starting phase (in radians)
+    const orbitAngularSpeeds = [];      // Angular speed (radians per second)
+
+    // White‑hole effect state:
+    let whiteHoleActive = false;
+    let repelActive = false;
+    const hoverForceConstant = 300;
+    const blackHoleThreshold = 0.5;
+    let blackHoleMesh = null, whiteHolePixel = null, smokeSprite = null;
+
+    // Cycle durations
+    const halfCycle = 73;
+    const fullCycle = 2 * halfCycle;   // 146 seconds
+
+    // Touch interactivity
+    let tapStartTime = 0, tapStartX = 0, tapStartY = 0;
+    let boostChaos = false, boostTimeout = null;
+
+    // --- AUDIO VARIABLES ---
+    let audioContext, analyser, audioData;
+
+    /**********************************
+     * AUDIO SETUP (Capture microphone input)
+     **********************************/
+    function setupAudio() {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia({ audio: true })
+          .then(stream => {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            audioData = new Uint8Array(analyser.frequencyBinCount);
+            source.connect(analyser);
+          })
+          .catch(err => {
+            console.log("Audio capture error: " + err);
+          });
+      } else {
+        console.log("getUserMedia not supported in this browser.");
+      }
+    }
+
+    /**********************************
+     * HELPER FUNCTIONS
+     **********************************/
+    // Returns a multiplier with discrete pulses.
+    function heartbeat(tau) {
+      const pulseTimes = [5, 12, 19, 27, 35, 44, 52, 61, 68];
+      let multiplier = 1;
+      for (let p of pulseTimes) {
+        let diff = Math.abs(tau - p);
+        if (diff < 0.4) {
+          multiplier += 0.2 * (1 - diff / 0.4);
+        }
+      }
+      return multiplier;
+    }
+
+    // Scale function for the forward half-cycle.
+    function getForwardScale(tau) {
+      let baseScale = 1;
+      if (tau < 20) {
+        baseScale = 1;
+      } else if (tau < 33) {
+        let progress = (tau - 20) / 13;
+        baseScale = 1 - 0.9 * progress;
+      } else if (tau < 40) {
+        baseScale = 0.1;
+      } else if (tau < 53) {
+        let progress = (tau - 40) / 13;
+        baseScale = 0.1 + (2.0 - 0.1) * Math.pow(progress, 2);
+      } else {
+        let progress = (tau - 53) / 20;
+        baseScale = 2.0 - (2.0 - 1) * progress;
+      }
+      return baseScale * heartbeat(tau);
+    }
+
+    // Full-cycle scale: forward then mirror.
+    function getFullScale(time) {
+      let T = time % fullCycle;
+      return (T < halfCycle) ? getForwardScale(T) : getForwardScale(fullCycle - T);
+    }
+
+    // Returns a "chaos amplitude" for random jitter.
+    function getChaosAmplitude(tau) {
+      if ((tau >= 40 && tau < 53) || (tau >= 20 && tau < 33)) {
+        return 0.06;
+      }
+      return 0.01;
+    }
+
+    /**********************************
+     * INITIALIZATION
+     **********************************/
+    function init() {
+      // Create scene, camera, renderer.
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 1000);
+      camera.position.z = 5;
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x000000, 1);
+      document.body.appendChild(renderer.domElement);
+
+      // Set up tap-to-boost chaos on the canvas.
+      renderer.domElement.addEventListener("touchstart", (event) => {
+        if (event.touches.length === 1) {
+          tapStartTime = Date.now();
+          tapStartX = event.touches[0].clientX;
+          tapStartY = event.touches[0].clientY;
+        }
+      }, {passive: false});
+
+      renderer.domElement.addEventListener("touchend", (event) => {
+        if (event.changedTouches.length === 1) {
+          const tapEndTime = Date.now();
+          const dx = event.changedTouches[0].clientX - tapStartX;
+          const dy = event.changedTouches[0].clientY - tapStartY;
+          const distance = Math.sqrt(dx*dx + dy*dy);
+          const duration = tapEndTime - tapStartTime;
+          if (duration < 200 && distance < 10) {
+            boostChaos = true;
+            if (boostTimeout) clearTimeout(boostTimeout);
+            boostTimeout = setTimeout(() => { boostChaos = false; }, 2000);
+          }
+        }
+      }, {passive: false});
+
+      // Set up ambient audio analysis.
+      setupAudio();
+
+      // Add lights.
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+      scene.add(ambientLight);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      directionalLight.position.set(1,1,1);
+      scene.add(directionalLight);
+
+      // --- MAIN PARTICLE SYSTEM ---
+      particleGeo = new THREE.BufferGeometry();
+      const vertices = [];
+      const colors = [];
+      for (let i = 0; i < particleCount; i++) {
+        let x = (Math.random()-0.5)*50;
+        let y = (Math.random()-0.5)*50;
+        let z = (Math.random()-0.5)*50;
+        vertices.push(x, y, z);
+        initPositions.push(x, y, z);
+        colors.push(Math.random(), Math.random(), Math.random());
+      }
+      particleGeo.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+      particleGeo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+
+      const material = new THREE.PointsMaterial({
+        vertexColors: true,
+        size: 0.1,
+        blending: THREE.AdditiveBlending,
+        transparent: true
+      });
+      particles = new THREE.Points(particleGeo, material);
+      scene.add(particles);
+
+      // --- ORBITING PARTICLE SYSTEM ---
+      orbitGeo = new THREE.BufferGeometry();
+      // Allocate arrays for orbiting particles.
+      for (let i = 0; i < orbitParticleCount; i++) {
+        // Choose a random parent index (the "lucky" main particle).
+        let parentIdx = Math.floor(Math.random() * particleCount);
+        orbitParentIndices.push(parentIdx);
+        // Random orbit radius (e.g., between 0.2 and 1.0).
+        orbitDistances.push(0.2 + Math.random() * 0.8);
+        // Initial phase between 0 and 2π.
+        orbitInitialAngles.push(Math.random() * Math.PI * 2);
+        // Angular speed between 0.2 and 1.0 radians per second.
+        orbitAngularSpeeds.push(0.2 + Math.random() * 0.8);
+        // Initial vertex position (will be updated in animate).
+        orbitVertices.push(0, 0, 0);
+        // Set a random initial color (we’ll update these later to match the pastel/satanic scheme).
+        orbitColors.push(Math.random(), Math.random(), Math.random());
+      }
+      orbitGeo.setAttribute("position", new THREE.Float32BufferAttribute(orbitVertices, 3));
+      orbitGeo.setAttribute("color", new THREE.Float32BufferAttribute(orbitColors, 3));
+
+      // Use a slightly larger size for orbiting particles.
+      const orbitMaterial = new THREE.PointsMaterial({
+        vertexColors: true,
+        size: 0.15,
+        blending: THREE.AdditiveBlending,
+        transparent: true
+      });
+      orbitParticles = new THREE.Points(orbitGeo, orbitMaterial);
+      scene.add(orbitParticles);
+
+      clock = new THREE.Clock();
+      animate();
+    }
+
+    /**********************************
+     * ANIMATION LOOP
+     **********************************/
+    function animate() {
+      const time = clock.getElapsedTime();
+      let iterationIndex = Math.floor(time / fullCycle);
+      let T = time % fullCycle;
+      let tau = (T < halfCycle) ? T : (fullCycle - T);
+      const scaleFactor = getFullScale(time);
+      const posArray = particleGeo.attributes.position.array;
+
+      // Update main particle positions.
+      for (let i = 0; i < posArray.length; i += 3) {
+        posArray[i]   = initPositions[i]   * scaleFactor;
+        posArray[i+1] = initPositions[i+1] * scaleFactor;
+        posArray[i+2] = initPositions[i+2] * scaleFactor;
+      }
+
+      // --- AUDIO ANALYSIS ---
+      let audioAverage = 0, audioFactor = 1, audioSatanicFactor = 0;
+      if (analyser && audioData) {
+        analyser.getByteFrequencyData(audioData);
+        let sum = 0;
+        for (let i = 0; i < audioData.length; i++) {
+          sum += audioData[i];
+        }
+        audioAverage = sum / audioData.length;  // roughly 0..255
+        audioFactor = 1 + audioAverage / 256;     // roughly 1 to 2
+        audioSatanicFactor = audioAverage / 255;    // normalized 0..1
+        // Add extra random jitter (hyper-synchronicities).
+        audioFactor += (Math.random()-0.5)*0.1;
+        audioSatanicFactor += (Math.random()-0.5)*0.1;
+        audioFactor = Math.max(1, Math.min(2, audioFactor));
+        audioSatanicFactor = Math.max(0, Math.min(1, audioSatanicFactor));
+      }
+
+      // Determine chaos amplitude.
+      let chaosAmp = getChaosAmplitude(tau);
+      if (boostChaos) { chaosAmp *= 3; }
+      chaosAmp *= audioFactor;
+
+      // Add jitter to main particle positions.
+      for (let i = 0; i < posArray.length; i++) {
+        posArray[i] += chaosAmp * (Math.random()-0.5);
+      }
+      particles.rotation.x += (Math.random()-0.5) * 0.003 * chaosAmp * 10;
+      particles.rotation.y += (Math.random()-0.5) * 0.003 * chaosAmp * 10;
+      particleGeo.attributes.position.needsUpdate = true;
+
+      /***************************************
+       * DARK‑MATTER SATANIC TRANSFORMATION
+       ***************************************/
+      const darkTransitionStart = fullCycle - 10;
+      let darkModeFactor = 0;
+      if (T >= darkTransitionStart) {
+        darkModeFactor = (T - darkTransitionStart) / (fullCycle - darkTransitionStart);
+      }
+      const originalBackground = new THREE.Color(0x000000);
+      const targetBackground = new THREE.Color(0x0d0d0d);
+      const blendedBackground = originalBackground.clone().lerp(targetBackground, darkModeFactor);
+      renderer.setClearColor(blendedBackground, 1);
+
+      /***************************************
+       * UPDATE PARTICLE COLORS (SZA Vibe)
+       ***************************************/
+      // Pastel palette inspired by Kiss Me More.
+      const pastelA = new THREE.Color(0xffb6c1); // light pink
+      const pastelB = new THREE.Color(0xe6e6fa); // lavender
+      const pastelC = new THREE.Color(0xb0e0e6); // powder blue
+      const darkTarget = new THREE.Color(0x2B001E);
+
+      let brightnessFactor = 1;
+      if (tau >= 53) {
+        let progress = (tau - 53) / 20;
+        brightnessFactor = 1 + 0.5 * progress;
+      }
+      brightnessFactor *= audioFactor;
+
+      const colArray = particleGeo.attributes.color.array;
+      for (let i = 0, p = 0; i < colArray.length; i += 3, p++) {
+        let c;
+        if (p % 3 === 0) c = pastelA.clone();
+        else if (p % 3 === 1) c = pastelB.clone();
+        else c = pastelC.clone();
+        c.multiplyScalar(brightnessFactor);
+        c.lerp(darkTarget, darkModeFactor);
+        c.lerp(darkTarget, audioSatanicFactor * 0.5);
+        colArray[i]   = c.r;
+        colArray[i+1] = c.g;
+        colArray[i+2] = c.b;
+      }
+      particleGeo.attributes.color.needsUpdate = true;
+
+      // Continuous subtle rotation.
+      particles.rotation.x += 0.002;
+      particles.rotation.y += 0.004;
+      particles.rotation.z += 0.006;
+
+      /***********************
+       * ORBITING PARTICLE SYSTEM UPDATE
+       ***********************/
+      // For each orbiting particle, determine its parent's current position and compute an orbital offset.
+      const orbitPosArray = orbitGeo.attributes.position.array;
+      const orbitColArray = orbitGeo.attributes.color.array;
+      for (let i = 0; i < orbitParticleCount; i++) {
+        let parentIdx = orbitParentIndices[i];
+        let pIndex = parentIdx * 3;
+        // Parent's current position from the main system.
+        let parentX = posArray[pIndex];
+        let parentY = posArray[pIndex+1];
+        let parentZ = posArray[pIndex+2];
+        // Compute orbital angle.
+        let angle = orbitInitialAngles[i] + orbitAngularSpeeds[i] * time;
+        let radius = orbitDistances[i];
+        // Position offset in parent's x-y plane.
+        let offsetX = radius * Math.cos(angle);
+        let offsetY = radius * Math.sin(angle);
+        // Optionally add a slight random z offset.
+        let offsetZ = (Math.random()-0.5)*0.1;
+        let idx3 = i * 3;
+        orbitPosArray[idx3]     = parentX + offsetX;
+        orbitPosArray[idx3 + 1] = parentY + offsetY;
+        orbitPosArray[idx3 + 2] = parentZ + offsetZ;
+        // For color, we can set orbiting particles to mimic a slightly different pastel hue.
+        // Here we simply reuse the pastelA color, modulated by brightness.
+        let orbitColor = pastelA.clone().multiplyScalar(brightnessFactor);
+        orbitColor.lerp(darkTarget, darkModeFactor);
+        orbitColor.lerp(darkTarget, audioSatanicFactor * 0.5);
+        orbitColArray[idx3]     = orbitColor.r;
+        orbitColArray[idx3 + 1] = orbitColor.g;
+        orbitColArray[idx3 + 2] = orbitColor.b;
+      }
+      orbitGeo.attributes.position.needsUpdate = true;
+      orbitGeo.attributes.color.needsUpdate = true;
+
+      /***********************
+       * WHITE-HOLE EFFECT
+       ***********************/
+      if (whiteHoleActive) {
+        const dt = clock.getDelta();
+        for (let i = 0; i < posArray.length; i += 3) {
+          let x = posArray[i], y = posArray[i+1], z = posArray[i+2];
+          let dx = -x, dy = -y, dz = -z;
+          let dist = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.0001;
+          let force = hoverForceConstant / (dist * dist);
+          if (repelActive) force = -force;
+          if (dist < blackHoleThreshold) force = -force;
+          let ax = force * dx / dist;
+          let ay = force * dy / dist;
+          let az = force * dz / dist;
+          posArray[i]   += ax * dt;
+          posArray[i+1] += ay * dt;
+          posArray[i+2] += az * dt;
+        }
+        particleGeo.attributes.position.needsUpdate = true;
+
+        if (!blackHoleMesh) {
+          const geo = new THREE.IcosahedronGeometry(0.3, 0);
+          const mat = new THREE.MeshPhongMaterial({
+            color: 0xff0000,
+            emissive: 0xff0000,
+            shininess: 100,
+            transparent: true,
+            opacity: 1,
+            side: THREE.DoubleSide
+          });
+          blackHoleMesh = new THREE.Mesh(geo, mat);
+          scene.add(blackHoleMesh);
+        }
+        blackHoleMesh.position.set(0,0,0);
+        blackHoleMesh.scale.setScalar(1 + 0.3 * Math.sin(2 * Math.PI * time));
+
+        if (!whiteHolePixel) {
+          const geoPixel = new THREE.SphereGeometry(0.08, 8, 8);
+          const matPixel = new THREE.MeshBasicMaterial({ color: 0xffffff });
+          whiteHolePixel = new THREE.Mesh(geoPixel, matPixel);
+          scene.add(whiteHolePixel);
+        }
+        whiteHolePixel.position.set(0,0,0);
+        whiteHolePixel.rotation.y += 0.1;
+
+        if (!smokeSprite) {
+          smokeSprite = createSmokeSprite();
+          scene.add(smokeSprite);
+        }
+        smokeSprite.position.set(0,0,0);
+        let scalePulse = 8 + 0.5 * Math.sin(time * 2);
+        smokeSprite.scale.set(scalePulse, scalePulse, 1);
+      } else {
+        if (blackHoleMesh) { scene.remove(blackHoleMesh); blackHoleMesh = null; }
+        if (whiteHolePixel) { scene.remove(whiteHolePixel); whiteHolePixel = null; }
+        if (smokeSprite) { scene.remove(smokeSprite); smokeSprite = null; }
+      }
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    /**********************************
+     * SMOKE SPRITE CREATION
+     **********************************/
+    function createSmokeSprite() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const context = canvas.getContext('2d');
+      const gradient = context.createRadialGradient(64,64,10,64,64,64);
+      gradient.addColorStop(0, 'rgba(255,255,255,0.8)');
+      gradient.addColorStop(1, 'rgba(255,255,255,0)');
+      context.fillStyle = gradient;
+      context.fillRect(0,0,128,128);
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.6,
+        blending: THREE.AdditiveBlending
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(6,6,1);
+      return sprite;
+    }
+
+    /**********************************
+     * TOUCHSCREEN INTERACTIVITY (Existing)
+     **********************************/
+    let lastTouchX = null, lastTouchY = null, lastPinchDistance = null;
+    window.addEventListener("touchstart", (event) => {
+      if (event.touches.length === 1) {
+        lastTouchX = event.touches[0].clientX;
+        lastTouchY = event.touches[0].clientY;
+      } else if (event.touches.length === 2) {
+        const dx = event.touches[0].clientX - event.touches[1].clientX;
+        const dy = event.touches[0].clientY - event.touches[1].clientY;
+        lastPinchDistance = Math.sqrt(dx*dx + dy*dy);
+      }
+    }, {passive: false});
+
+    window.addEventListener("touchmove", (event) => {
+      if (event.touches.length === 1 && lastTouchX !== null && lastTouchY !== null) {
+        const touch = event.touches[0];
+        const dx = touch.clientX - lastTouchX;
+        const dy = touch.clientY - lastTouchY;
+        lastTouchX = touch.clientX;
+        lastTouchY = touch.clientY;
+        particles.rotation.y += dx * 0.005;
+        particles.rotation.x += dy * 0.005;
+      } else if (event.touches.length === 2) {
+        const dx = event.touches[0].clientX - event.touches[1].clientX;
+        const dy = event.touches[0].clientY - event.touches[1].clientY;
+        const currentDistance = Math.sqrt(dx*dx + dy*dy);
+        if (lastPinchDistance !== null) {
+          const scale = currentDistance / lastPinchDistance;
+          camera.position.z /= scale;
+          camera.position.z = Math.max(3, Math.min(15, camera.position.z));
+        }
+        lastPinchDistance = currentDistance;
+      }
+    }, {passive: false});
+
+    window.addEventListener("touchend", (event) => {
+      if (event.touches.length < 2) { lastPinchDistance = null; }
+      if (event.touches.length === 0) { lastTouchX = null; lastTouchY = null; }
+    });
+
+    /**********************************
+     * WINDOW RESIZE HANDLING
+     **********************************/
+    window.addEventListener("resize", () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    /**********************************
+     * Fullscreen Toggle
+     **********************************/
+    document.getElementById("fullscreen-button").addEventListener("click", () => {
+      let elem = document.documentElement;
+      if (!document.fullscreenElement) { elem.requestFullscreen(); }
+      else { document.exitFullscreen(); }
+    });
+
+    /**********************************
+     * WHITE-HOLE ACTIVATION VIA PUSH BUTTON
+     **********************************/
+    let hoverTimeout;
+    const pushButton = document.getElementById("pushButton");
+    pushButton.addEventListener("mouseenter", () => {
+      hoverTimeout = setTimeout(() => { whiteHoleActive = true; }, 6000);
+    });
+    pushButton.addEventListener("mouseleave", () => { clearTimeout(hoverTimeout); whiteHoleActive = false; });
+    pushButton.addEventListener("touchstart", () => {
+      hoverTimeout = setTimeout(() => { whiteHoleActive = true; }, 6000);
+    });
+    pushButton.addEventListener("touchend", () => { clearTimeout(hoverTimeout); whiteHoleActive = false; });
+
+    /**********************************
+     * ENCRYPTED BUTTON (Fullscreen) REPULSION MODE
+     **********************************/
+    const fsButton = document.getElementById("fullscreen-button");
+    fsButton.addEventListener("mouseenter", () => { repelActive = true; });
+    fsButton.addEventListener("mouseleave", () => { repelActive = false; });
+    fsButton.addEventListener("touchstart", () => { repelActive = true; });
+    fsButton.addEventListener("touchend", () => { repelActive = false; });
+
+    /**********************************
+     * INITIALIZE THE SCENE
+     **********************************/
+    init();
+  })();
+  </script>
+</body>
+</html>
+
+Johnny Applese
+To turn your "Reality Breaker" Three.js animation into a Windows screensaver, follow these steps:
+Steps to Convert the HTML into a Windows Screensaver (.SCR)
+
+Save the HTML File:
+
+Copy your HTML code into a file and save it as RealityBreaker.html.
+Use Electron to Create a Screensaver App:
+
+Electron lets you create fullscreen applications that can be run as a .SCR file.
+Set Up an Electron Project
+
+Install Node.js if you haven't already.
+Open a terminal (Command Prompt or PowerShell) and run:
+mkdir RealityBreakerScreensaver
+cd RealityBreakerScreensaver
+npm init -y
+npm install electron
+Create an Electron Main File
+
+Inside your RealityBreakerScreensaver folder, create a new file called main.js and add:
+
+const { app, BrowserWindow } = require('electron');
+
+let mainWindow;
+
+app.whenReady().then(() => {
+    mainWindow = new BrowserWindow({
+        width: 800,
+        height: 600,
+        fullscreen: true,
+        frame: false,
+        alwaysOnTop: true,
+        webPreferences: {
+            nodeIntegration: false,
+        }
+    });
+
+    mainWindow.loadFile('RealityBreaker.html');
+
+    // Close when mouse or keyboard is used
+    mainWindow.on('blur', () => app.quit());
+    mainWindow.webContents.on('before-input-event', () => app.quit());
+});
+
+app.on('window-all-closed', () => {
+    app.quit();
+});
+Modify package.json
+
+Open package.json and change the "main" value to "main.js".
+Add a script to run Electron:
+"scripts": {
+  "start": "electron ."
+}
+Package as a Windows Screensaver
+
+Install a tool to package the app:
+npm install electron-packager -g
+Run:
+electron-packager . RealityBreaker --platform=win32 --arch=x64 --out=dist --overwrite
+Navigate to dist/RealityBreaker-win32-x64, rename RealityBreaker.exe to RealityBreaker.scr.
+Move to Windows Screensaver Directory
+
+Copy RealityBreaker.scr to C:\Windows\System32\
+Set it as your screensaver via Control Panel > Appearance & Personalization > Change Screen Saver.
+🎉 Now, you have a fully dynamic Three.js screensaver on Windows!
+
+
+
+
+🚀 Let me know if you need refinements!
